@@ -22,7 +22,7 @@ def extract_keywords(text, api_key, num_keywords=10):
     """テキストからキーワードを生成する"""
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-flash-latest')
         
         prompt = f'''
         以下の文章は、ある講義を文字起こししたものです。
