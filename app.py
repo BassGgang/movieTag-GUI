@@ -5,11 +5,18 @@ import os
 import tempfile
 import google.generativeai as genai
 from dotenv import load_dotenv
+import json
 
 # .envファイルから環境変数を読み込む
 load_dotenv()
 
-# --- 関数定義 ---
+# --- 定数定義 ---
+CATEGORIES = [
+    "教育", "経済・金融", "宇宙・物理", "AI・情報", "環境",
+    "食料・農業・水産業", "ロボット・技術革新", "生命・医療", "文化・芸術",
+    "歴史・哲学", "国際関係", "都市・建築", "人口・社会問題", "数理",
+    "エネルギー・資源", "災害・防災", "心理・認知科学"
+]
 
 @st.cache_data
 def transcribe_video(video_path):
@@ -18,33 +25,55 @@ def transcribe_video(video_path):
     result = model.transcribe(video_path, fp16=False)
     return result['text']
 
-def extract_keywords(text, api_key, num_keywords=10):
-    """テキストからキーワードを生成する"""
+def generate_analysis(text, api_key, num_keywords=10):
+    """テキストから要約、キーワード、関連カテゴリを抽出する"""
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-flash-latest')
         
+        category_list_str = ", ".join(CATEGORIES)
+        
         prompt = f'''
         以下の文章は、ある講義を文字起こししたものです。
-        この講義内容を要約し、最も関連性の高いキーワードを{num_keywords}個、カンマ区切りで生成してください。
-        キーワードは単語または短いフレーズとし、説明は含めないでください。
 
+        ### 指示 ###
+        1. この講義内容を200文字程度で要約してください。
+        2. 要約内容から、最も関連性の高いキーワードを{num_keywords}個抽出してください。
+        3. 以下のカテゴリリストから、この講義内容に最も関連するものをすべて選んでください。
+        4. 結果を必ず以下のJSON形式で出力してください。
+        {{
+          "summary": "（ここに要約文）",
+          "keywords": ["キーワード1", "キーワード2", ...],
+          "categories": ["カテゴリA", "カテゴリB", ...]
+        }}
+
+        ### カテゴリリスト ###
+        {category_list_str}
+
+        ### 文章 ###
         ---
         {text}
         ---
         '''
         
         response = model.generate_content(prompt)
-        if response.text:
-            keywords = [keyword.strip() for keyword in response.text.split(',')]
-            return keywords
-        else:
-            st.error("キーワードを生成できませんでした。モデルからの応答が空です。")
-            return ["キーワードの生成に失敗しました。"]
+        
+        # モデルからの応答テキストを抽出し、JSONとしてパースする
+        # モデルが ```json ... ``` のようなマークダウン形式で返すことがあるため、それを取り除く
+        response_text = response.text.strip()
+        if response_text.startswith("```json"):
+            response_text = response_text[7:]
+        if response_text.endswith("```"):
+            response_text = response_text[:-3]
+        
+        analysis_result = json.loads(response_text)
+        
+        return analysis_result
 
     except Exception as e:
-        st.error(f"Gemini APIとの連携中にエラーが発生しました: {e}")
-        return ["キーワードの生成に失敗しました。"]
+        st.error(f"Gemini APIとの連携中または結果の解析中にエラーが発生しました: {e}")
+        return None
+
 
 
 # --- Streamlit UI ---
@@ -88,17 +117,26 @@ else:
                 transcribed_text = transcribe_video(audio_path)
                 progress_bar.progress(66)
 
-                status_text.text("Step 3/3: テキストからキーワードを抽出しています...")
-                keywords = extract_keywords(transcribed_text, api_key, num_keywords=10)
+                status_text.text("Step 3/3: AIによる分析（要約・キーワード・カテゴリ抽出）を実行しています...")
+                analysis_result = generate_analysis(transcribed_text, api_key, num_keywords=10)
                 progress_bar.progress(100)
 
-                status_text.success("処理が完了しました！")
-                
-                st.subheader("抽出されたキーワード")
-                st.markdown(f"### **{ '、'.join(keywords) }**")
-                
-                with st.expander("全文文字起こし結果を見る"):
-                    st.text_area("", transcribed_text, height=300)
+                if analysis_result:
+                    status_text.success("処理が完了しました！")
+                    
+                    st.subheader("関連カテゴリ")
+                    st.markdown(f"#### **{ '、'.join(analysis_result['categories']) }**")
+
+                    st.subheader("AIによる要約")
+                    st.info(analysis_result['summary'])
+
+                    st.subheader("抽出されたキーワード")
+                    st.markdown(f"##### { '、'.join(analysis_result['keywords']) }")
+                    
+                    with st.expander("全文文字起こし結果を見る"):
+                        st.text_area("", transcribed_text, height=300)
+                else:
+                    status_text.error("分析結果の取得に失敗しました。")
 
             except Exception as e:
                 st.error(f"処理中にエラーが発生しました: {e}")
